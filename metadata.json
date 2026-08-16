@@ -1,0 +1,6 @@
+{
+  "name": "Reunite – Missing Person Finder",
+  "description": "A web application to help families find and report missing children and elderly people with guardian contact and admin verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
