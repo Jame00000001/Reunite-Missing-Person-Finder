@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   LayoutDashboard,
   AlertCircle,
@@ -7,17 +7,19 @@ import {
   Trash2,
   Eye,
   CheckCircle2,
-  Clock,
   MapPin,
   Calendar,
-  Phone,
-  ShieldCheck,
-  AlertTriangle,
   Printer,
+  Bell,
+  Navigation,
 } from 'lucide-react';
 import { Report } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { api } from '../services/api.ts';
+import {
+  getMyReportsFromFirestore,
+  updateReportInFirestore,
+  deleteReportInFirestore,
+} from '../services/firestoreService.ts';
 
 interface UserDashboardPageProps {
   onOpenReportMissing: () => void;
@@ -26,6 +28,9 @@ interface UserDashboardPageProps {
   onViewDetails: (report: Report) => void;
   onPrintPoster: (report: Report) => void;
   onOpenAuth: (mode?: 'login' | 'register') => void;
+  unreadAlertsCount?: number;
+  onOpenLocationAlerts?: () => void;
+  onDataChanged?: () => void;
 }
 
 export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
@@ -35,74 +40,66 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   onViewDetails,
   onPrintPoster,
   onOpenAuth,
+  unreadAlertsCount = 0,
+  onOpenLocationAlerts,
+  onDataChanged,
 }) => {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAdmin, isAuthenticated } = useAuth();
   const [myReports, setMyReports] = useState<Report[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmReuniteId, setConfirmReuniteId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const fetchMyReports = async () => {
-    if (!isAuthenticated) return;
+  const fetchMyReports = useCallback(async () => {
+    if (!isAuthenticated || !user) return;
     setIsLoading(true);
+    setErrorMsg(null);
     try {
-      const res = await api.reports.getMyReports();
-      if (res.success) {
-        setMyReports(res.reports);
-      }
-    } catch (err) {
+      const reports = await getMyReportsFromFirestore(user.id);
+      setMyReports(reports);
+    } catch (err: any) {
       console.error('Failed to fetch user reports:', err);
+      setErrorMsg('Failed to load your reports from Firestore.');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [isAuthenticated, user]);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && user) {
       fetchMyReports();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user, fetchMyReports]);
 
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this case report? This cannot be undone.')) {
-      return;
-    }
-
+  const handleDelete = async (id: string) => {
     setDeletingId(id);
+    setErrorMsg(null);
     try {
-      const res = await api.reports.delete(id);
-      if (res.success) {
-        setFeedback('Report deleted successfully.');
-        setMyReports((prev) => prev.filter((r) => r.id !== id));
-      } else {
-        alert(res.message || 'Failed to delete report.');
-      }
+      await deleteReportInFirestore(id);
+      setFeedback('Report deleted successfully.');
+      setConfirmDeleteId(null);
+      setMyReports((prev) => prev.filter((r) => r.id !== id));
+      if (onDataChanged) onDataChanged();
     } catch (err: any) {
-      alert(err?.message || 'Error occurred while deleting.');
+      setErrorMsg(err?.message || 'Error occurred while deleting report.');
     } finally {
       setDeletingId(null);
     }
   };
 
   const handleMarkAsReunited = async (report: Report) => {
-    if (
-      !window.confirm(
-        `Great news! Mark ${report.name || 'this case'} as safely reunited with family?`
-      )
-    ) {
-      return;
-    }
-
+    setErrorMsg(null);
     try {
-      const res = await api.reports.update(report.id, {
-        status: 'Reunited',
-      });
-      if (res.success) {
-        setFeedback(`Case #${report.id} marked as Reunited! 🎉`);
-        fetchMyReports();
-      }
-    } catch {
-      alert('Failed to update status.');
+      await updateReportInFirestore(report.id, { status: 'Reunited' }, isAdmin);
+      setFeedback(`Case #${report.id.slice(0, 8)} marked as Reunited!`);
+      setConfirmReuniteId(null);
+      await fetchMyReports();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to update case status.');
     }
   };
 
@@ -112,23 +109,22 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
         <div className="w-14 h-14 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center mx-auto">
           <LayoutDashboard className="w-7 h-7" />
         </div>
-        <h2 className="text-xl font-bold text-slate-900">User Dashboard Login Required</h2>
+        <h2 className="text-xl font-bold text-slate-900">User Dashboard Sign-In Required</h2>
         <p className="text-xs text-slate-500">
-          Please log in with your email and password to view and manage your submitted reports.
+          Please sign in with Google to view and manage your submitted reports.
         </p>
         <div className="pt-2">
           <button
             onClick={() => onOpenAuth('login')}
             className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl transition-colors shadow-sm"
           >
-            Log In to Your Dashboard
+            Sign In to Your Dashboard
           </button>
         </div>
       </div>
     );
   }
 
-  // User Stats
   const totalUserReports = myReports.length;
   const missingCount = myReports.filter((r) => r.status === 'Missing').length;
   const foundCount = myReports.filter((r) => r.status === 'Found').length;
@@ -164,7 +160,8 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
             Welcome, {user?.name}
           </h1>
           <p className="text-xs text-slate-300 mt-1">
-            {user?.email} • {user?.phone}
+            {user?.email}
+            {user?.phone ? ` • ${user.phone}` : ''}
           </p>
         </div>
 
@@ -187,7 +184,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
         </div>
       </div>
 
-      {/* Feedback banner */}
+      {/* Feedback & Error banners */}
       {feedback && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center justify-between">
           <span className="flex items-center gap-2">
@@ -199,6 +196,70 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
             className="text-xs text-emerald-700 underline font-bold"
           >
             Dismiss
+          </button>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600" />
+            {errorMsg}
+          </span>
+          <button
+            onClick={() => setErrorMsg(null)}
+            className="text-xs text-rose-700 underline font-bold"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Nearby Alerts & Location Card */}
+      {onOpenLocationAlerts && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                user?.latitude !== null &&
+                user?.latitude !== undefined &&
+                user?.notifications_enabled !== false
+                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                  : 'bg-blue-50 text-blue-600 border border-blue-200'
+              }`}
+            >
+              <Navigation className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <span>10 km Nearby Missing Person Alerts</span>
+                {unreadAlertsCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-600 text-white">
+                    {unreadAlertsCount} New
+                  </span>
+                )}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {user?.latitude !== null && user?.latitude !== undefined
+                  ? `Monitoring radius active around: ${
+                      user.location_label ||
+                      `${Number(user.latitude).toFixed(4)}, ${Number(user.longitude).toFixed(4)}`
+                    }`
+                  : 'Set your current location to receive instant push alerts whenever someone goes missing within 10 km.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={onOpenLocationAlerts}
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 transition-colors shadow-xs shrink-0"
+          >
+            <Bell className="w-3.5 h-3.5" />
+            <span>
+              {user?.latitude !== null && user?.latitude !== undefined
+                ? 'Manage Location & Alerts'
+                : 'Enable Location Alerts'}
+            </span>
           </button>
         </div>
       )}
@@ -279,6 +340,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
           <div className="divide-y divide-slate-100">
             {myReports.map((report) => {
               const isMissing = report.report_type === 'missing';
+              const isTerminal = !isAdmin && (report.status === 'Reunited' || report.status === 'Closed');
               return (
                 <div
                   key={report.id}
@@ -310,7 +372,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
                         >
                           {report.status}
                         </span>
-                        <span className="text-xs text-slate-400">ID: #{report.id}</span>
+                        <span className="text-xs text-slate-400">ID: #{report.id.slice(0, 8)}</span>
                       </div>
 
                       <h4 className="font-bold text-base text-slate-900">
@@ -331,7 +393,6 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
                         </span>
                       </div>
 
-                      {/* Admin Note if any */}
                       {report.admin_notes && (
                         <p className="text-xs text-indigo-700 bg-indigo-50 px-2 py-1 rounded-md inline-block font-medium">
                           Note from Admin: {report.admin_notes}
@@ -358,32 +419,68 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
                       <span>Poster</span>
                     </button>
 
-                    <button
-                      onClick={() => onEditReport(report)}
-                      className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-lg flex items-center gap-1"
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                      <span>Edit</span>
-                    </button>
-
-                    {report.status !== 'Reunited' && report.status !== 'Closed' && (
+                    {!isTerminal && (
                       <button
-                        onClick={() => handleMarkAsReunited(report)}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs"
+                        onClick={() => onEditReport(report)}
+                        className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-lg flex items-center gap-1"
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Reunited</span>
+                        <Edit className="w-3.5 h-3.5" />
+                        <span>Edit</span>
                       </button>
                     )}
 
-                    <button
-                      onClick={() => handleDelete(report.id)}
-                      disabled={deletingId === report.id}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                      title="Delete Report"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {report.status !== 'Reunited' && report.status !== 'Closed' && (
+                      confirmReuniteId === report.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleMarkAsReunited(report)}
+                            className="px-2.5 py-1.5 bg-emerald-700 text-white text-xs font-bold rounded-lg"
+                          >
+                            Confirm Reunited
+                          </button>
+                          <button
+                            onClick={() => setConfirmReuniteId(null)}
+                            className="px-2 py-1.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmReuniteId(report.id)}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Reunited</span>
+                        </button>
+                      )
+                    )}
+
+                    {confirmDeleteId === report.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleDelete(report.id)}
+                          disabled={deletingId === report.id}
+                          className="px-2.5 py-1.5 bg-rose-600 text-white text-xs font-bold rounded-lg disabled:opacity-50"
+                        >
+                          {deletingId === report.id ? 'Deleting...' : 'Confirm Delete'}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2 py-1.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDeleteId(report.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        title="Delete Report"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );

@@ -4,26 +4,28 @@ import {
   Upload,
   AlertCircle,
   PlusCircle,
-  Image as ImageIcon,
   CheckCircle2,
   Phone,
-  MapPin,
   Calendar,
   Clock,
   Sparkles,
 } from 'lucide-react';
-import { ReportType, Gender } from '../types/index.ts';
+import { ReportType, Gender, NearbyAlertSummary } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
+import { createReportInFirestore } from '../services/firestoreService.ts';
+import {
+  LocationPickerMap,
+  SelectedLocationValue,
+} from './maps/LocationPickerMap.tsx';
 
 interface ReportFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialType?: ReportType;
-  onSuccess: () => void;
+  onSuccess: (alertSummary?: NearbyAlertSummary) => void;
 }
 
-// Preset photo options to make testing effortless for professors & students
 const SAMPLE_PHOTOS = [
   {
     label: 'Child / Toddler',
@@ -43,20 +45,66 @@ const SAMPLE_PHOTOS = [
   },
 ];
 
+async function compressImageToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read selected image file.'));
+    reader.onload = (event) => {
+      const dataUrl = String(event.target?.result || '');
+      const img = new Image();
+      img.onerror = () => reject(new Error('Unsupported or corrupted image file.'));
+      img.onload = () => {
+        const maxDimension = 900;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.78);
+        resolve(compressed);
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export const ReportFormModal: React.FC<ReportFormModalProps> = ({
   isOpen,
   onClose,
   initialType = 'missing',
   onSuccess,
 }) => {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAdmin, isAuthenticated } = useAuth();
 
   const [reportType, setReportType] = useState<ReportType>(initialType);
   const [name, setName] = useState('');
   const [age, setAge] = useState<string>('');
   const [gender, setGender] = useState<Gender>('Male');
   const [photoUrl, setPhotoUrl] = useState('');
-  const [location, setLocation] = useState('');
+  const [locationValue, setLocationValue] = useState<SelectedLocationValue>({
+    location: '',
+    latitude: null,
+    longitude: null,
+    place_id: null,
+  });
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [reportTime, setReportTime] = useState('12:00 PM');
   const [clothingDescription, setClothingDescription] = useState('');
@@ -76,8 +124,7 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
 
   const isMissing = reportType === 'missing';
 
-  // Handle local file upload converted to Base64
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -86,22 +133,41 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
-      if (uploadEvent.target?.result) {
-        setPhotoUrl(String(uploadEvent.target.result));
-        setError(null);
+    try {
+      const compressed = await compressImageToDataUrl(file);
+      if (compressed.length > 880000) {
+        setError('Compressed image is still too large. Please choose a smaller photo or paste an image URL.');
+        return;
       }
-    };
-    reader.readAsDataURL(file);
+      setPhotoUrl(compressed);
+      setError(null);
+    } catch (err: any) {
+      setError(err?.message || 'Could not process the selected image.');
+    }
+  };
+
+  const resetForm = () => {
+    setName('');
+    setAge('');
+    setGender('Male');
+    setPhotoUrl('');
+    setLocationValue({
+      location: '',
+      latitude: null,
+      longitude: null,
+      place_id: null,
+    });
+    setClothingDescription('');
+    setAdditionalInfo('');
+    setError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (!isAuthenticated) {
-      setError('You must be logged in to submit a report. Please log in or register.');
+    if (!isAuthenticated || !user) {
+      setError('You must be signed in to submit a report.');
       return;
     }
 
@@ -120,8 +186,21 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
       return;
     }
 
-    if (!location.trim()) {
+    if (!locationValue.location.trim()) {
       setError(`Please specify the ${isMissing ? 'last seen location' : 'found location'}.`);
+      return;
+    }
+
+    const hasValidCoordinates =
+      locationValue.latitude !== null &&
+      locationValue.longitude !== null &&
+      Number.isFinite(locationValue.latitude) &&
+      Number.isFinite(locationValue.longitude);
+
+    if (isMissing && !hasValidCoordinates) {
+      setError(
+        'Please select or pin the last-seen location on the map (or click Use GPS) so nearby users within 10 km can be alerted.'
+      );
       return;
     }
 
@@ -137,28 +216,71 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
 
     setIsSubmitting(true);
     try {
-      const res = await api.reports.create({
-        report_type: reportType,
-        name: name.trim() || (isMissing ? 'Unknown Name' : 'Unidentified Person'),
-        age: Number(age),
-        gender,
-        photo_url: photoUrl.trim(),
-        location: location.trim(),
-        report_date: reportDate,
-        report_time: reportTime.trim() || null,
-        clothing_description: clothingDescription.trim() || null,
-        additional_info: additionalInfo.trim() || null,
-        contact_phone: contactPhone.trim(),
-      });
+      const createdReport = await createReportInFirestore(
+        user.id,
+        user.name,
+        {
+          report_type: reportType,
+          name: name.trim() || (isMissing ? 'Unknown Name' : 'Unidentified Person'),
+          age: Number(age),
+          gender,
+          photo_url: photoUrl.trim(),
+          location: locationValue.location.trim(),
+          latitude: locationValue.latitude,
+          longitude: locationValue.longitude,
+          place_id: locationValue.place_id || null,
+          report_date: reportDate,
+          report_time: reportTime.trim() || null,
+          clothing_description: clothingDescription.trim() || null,
+          additional_info: additionalInfo.trim() || null,
+          contact_phone: contactPhone.trim(),
+        },
+        isAdmin
+      );
 
-      if (res.success) {
-        onSuccess();
-        onClose();
-      } else {
-        setError(res.message || 'Failed to submit report. Please try again.');
+      let nearbyAlertSummary: NearbyAlertSummary | undefined;
+      if (
+        reportType === 'missing' &&
+        hasValidCoordinates &&
+        locationValue.latitude !== null &&
+        locationValue.longitude !== null
+      ) {
+        try {
+          const dispatchRes = await api.notifications.dispatchNearby({
+            reportId: createdReport.id,
+            name: createdReport.name,
+            age: createdReport.age,
+            gender: createdReport.gender,
+            location: createdReport.location,
+            latitude: locationValue.latitude,
+            longitude: locationValue.longitude,
+            reportDate: createdReport.report_date,
+            reportTime: createdReport.report_time,
+            clothingDescription: createdReport.clothing_description,
+            additionalInfo: createdReport.additional_info,
+            contactPhone: createdReport.contact_phone,
+            photoUrl: createdReport.photo_url,
+          });
+          if (dispatchRes.success && dispatchRes.summary) {
+            nearbyAlertSummary = dispatchRes.summary;
+          }
+        } catch (pushErr) {
+          console.error('Nearby push dispatch warning:', pushErr);
+        }
       }
+
+      resetForm();
+      onSuccess(nearbyAlertSummary);
+      onClose();
     } catch (err: any) {
-      setError(err?.message || 'Network error occurred while submitting report.');
+      let friendly = 'Failed to submit report. Please try again.';
+      try {
+        const parsed = JSON.parse(err?.message || '');
+        if (parsed?.error) friendly = parsed.error;
+      } catch {
+        if (err?.message) friendly = err.message;
+      }
+      setError(friendly);
     } finally {
       setIsSubmitting(false);
     }
@@ -183,7 +305,7 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
               </h2>
               <p className="text-xs text-white/80">
                 {isMissing
-                  ? 'Submit details to alert the community and emergency networks'
+                  ? 'Submit details to alert nearby residents within 10 km and emergency networks'
                   : 'Help a lost child or elderly person safely reconnect with their family'}
               </p>
             </div>
@@ -307,7 +429,6 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
                 </label>
               </div>
 
-              {/* Sample Photo Presets for rapid evaluator testing */}
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-amber-500" /> Quick Sample Photos:
@@ -324,7 +445,6 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
                 ))}
               </div>
 
-              {/* Photo Preview */}
               {photoUrl && (
                 <div className="flex items-center gap-3 p-2 bg-slate-100 rounded-xl">
                   <div className="w-14 h-14 rounded-lg overflow-hidden bg-slate-200 shrink-0">
@@ -339,32 +459,27 @@ export const ReportFormModal: React.FC<ReportFormModalProps> = ({
                     <p className="font-bold text-slate-800 flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Photo Loaded Successfully
                     </p>
-                    <p className="text-[11px] text-slate-500 truncate max-w-xs">{photoUrl}</p>
+                    <p className="text-[11px] text-slate-500 truncate max-w-xs">{photoUrl.slice(0, 80)}</p>
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Row 3: Location */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
-              <MapPin className="w-3.5 h-3.5 text-rose-600" />
-              {isMissing ? 'Last Seen Location *' : 'Found Location *'}
-            </label>
-            <input
-              type="text"
-              required
-              placeholder={
-                isMissing
-                  ? 'e.g. Greenwood Central Park Playground, Springfield'
-                  : 'e.g. Metro Subway Station Entrance - North Line'
-              }
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
-            />
-          </div>
+          {/* Row 3: Interactive OpenStreetMap Location Picker */}
+          <LocationPickerMap
+            label={isMissing ? 'Last Seen Location (Map Pin Required) *' : 'Found Location (Search or Pin on Map) *'}
+            value={locationValue}
+            onChange={setLocationValue}
+            placeholder={
+              isMissing
+                ? 'Type address/landmark (click Search) or click on the map...'
+                : 'Type found location (click Search) or click on the map...'
+            }
+            required={true}
+            heightClass="h-56 sm:h-64"
+            pinColor={isMissing ? 'rose' : 'emerald'}
+          />
 
           {/* Row 4: Date & Time */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

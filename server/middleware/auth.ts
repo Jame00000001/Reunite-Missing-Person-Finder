@@ -1,48 +1,79 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { AuthJwtPayload } from '../types.ts';
+import { initializeApp, getApps, getApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'reunite_university_jwt_secret_key_2026';
+export const adminApp = getApps().length
+  ? getApp()
+  : initializeApp({
+      projectId: firebaseConfig.projectId,
+    });
 
-export interface AuthenticatedRequest extends Request {
-  user?: AuthJwtPayload;
+const adminAuth = getAuth(adminApp);
+
+export interface FirebaseAuthenticatedUser {
+  uid: string;
+  email?: string;
+  emailVerified: boolean;
 }
 
-export const verifyToken = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+export interface AuthenticatedRequest extends Request {
+  firebaseUser?: FirebaseAuthenticatedUser;
+  user?: { id: number; email: string; name: string; role: 'user' | 'admin' };
+}
+
+// Kept for the legacy SQL controllers; the active API authenticates with Firebase ID tokens.
+export const JWT_SECRET = process.env.JWT_SECRET || 'reunite-development-only-secret';
+
+export const verifyToken = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    res.status(401).json({
+      success: false,
+      message: 'Authentication required. Please sign in.',
+    });
     return;
   }
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as AuthJwtPayload;
-    req.user = decoded;
+    const decoded = await adminAuth.verifyIdToken(token);
+    req.firebaseUser = {
+      uid: decoded.uid,
+      email: decoded.email,
+      emailVerified: Boolean(decoded.email_verified),
+    };
+    req.user = {
+      id: Number(decoded.id ?? 0),
+      email: decoded.email ?? '',
+      name: decoded.name ?? '',
+      role: decoded.role === 'admin' ? 'admin' : 'user',
+    };
     next();
-  } catch (err) {
-    res.status(401).json({ success: false, message: 'Invalid or expired token. Please log in again.' });
+  } catch {
+    res.status(401).json({
+      success: false,
+      message: 'Invalid or expired Firebase session. Please sign in again.',
+    });
   }
+};
+
+export const optionalAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  if (!req.headers.authorization) {
+    next();
+    return;
+  }
+  void verifyToken(req, res, next);
 };
 
 export const requireAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
-  if (!req.user || req.user.role !== 'admin') {
-    res.status(403).json({ success: false, message: 'Access denied. Administrator privileges required.' });
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ success: false, message: 'Administrator access required.' });
     return;
-  }
-  next();
-};
-
-export const optionalAuth = (req: AuthenticatedRequest, _res: Response, next: NextFunction): void => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET) as AuthJwtPayload;
-      req.user = decoded;
-    } catch {
-      // ignore
-    }
   }
   next();
 };

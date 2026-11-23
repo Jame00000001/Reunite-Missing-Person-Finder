@@ -16,6 +16,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { Report } from '../types/index.ts';
+import { ReportLocationMap } from './maps/ReportLocationMap.tsx';
 
 interface PersonDetailModalProps {
   report: Report | null;
@@ -84,7 +85,7 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
               Status: {report.status}
             </span>
           </div>
-          <span className="text-xs font-semibold text-slate-500">Case ID: #REP-{report.id}</span>
+          <span className="text-xs font-semibold text-slate-500">Case ID: #REP-{report.id.slice(0, 8)}</span>
         </div>
 
         {/* Main Body Grid */}
@@ -199,6 +200,14 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
 
           {/* Extended Details Section */}
           <div className="space-y-4 pt-2 border-t border-slate-100">
+            <ReportLocationMap
+              latitude={report.latitude}
+              longitude={report.longitude}
+              locationLabel={report.location}
+              personName={report.name || (isMissing ? 'Missing Person' : 'Found Person')}
+              isMissing={isMissing}
+            />
+
             {/* Clothing Description */}
             {report.clothing_description && (
               <div className="bg-amber-50/60 p-4 rounded-xl border border-amber-200">

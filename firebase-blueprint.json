@@ -1,0 +1,262 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Authenticated guardian, volunteer, or administrator profile with private alert location preferences.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Authentication user UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Full display name of the user.",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified account email address.",
+          "minLength": 3,
+          "maxLength": 150
+        },
+        "phone": {
+          "type": "string",
+          "description": "Contact phone number.",
+          "minLength": 0,
+          "maxLength": 50
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin"],
+          "description": "Application account role."
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Saved monitoring latitude (-90 to 90) or null."
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Saved monitoring longitude (-180 to 180) or null."
+        },
+        "locationLabel": {
+          "type": "string",
+          "description": "Human-readable monitoring area label.",
+          "maxLength": 255
+        },
+        "notificationsEnabled": {
+          "type": "boolean",
+          "description": "Whether 10 km nearby alerts are enabled."
+        },
+        "locationUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when monitoring location was last updated."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of user creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last profile update."
+        }
+      },
+      "required": [
+        "uid",
+        "name",
+        "email",
+        "phone",
+        "role",
+        "notificationsEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Report": {
+      "title": "Missing or Found Person Report",
+      "description": "Case record submitted by an authenticated user for a missing or found individual.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the user who filed the report.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reporterName": {
+          "type": "string",
+          "description": "Display name of the submitting user.",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "reportType": {
+          "type": "string",
+          "enum": ["missing", "found"],
+          "description": "Whether the report is for a missing or found person."
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name or identifier of the person.",
+          "maxLength": 150
+        },
+        "age": {
+          "type": "number",
+          "description": "Estimated or exact age (0 to 130)."
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["Male", "Female", "Other"],
+          "description": "Gender of the person."
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "HTTPS image URL or compressed Base64 data URL.",
+          "minLength": 1,
+          "maxLength": 900000
+        },
+        "location": {
+          "type": "string",
+          "description": "Last seen or found location address.",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Pinned latitude (-90 to 90) or null."
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Pinned longitude (-180 to 180) or null."
+        },
+        "placeId": {
+          "type": "string",
+          "description": "Optional OpenStreetMap place identifier.",
+          "maxLength": 255
+        },
+        "reportDate": {
+          "type": "string",
+          "description": "Date last seen or found (YYYY-MM-DD).",
+          "minLength": 4,
+          "maxLength": 30
+        },
+        "reportTime": {
+          "type": "string",
+          "description": "Approximate time last seen or found.",
+          "maxLength": 30
+        },
+        "clothingDescription": {
+          "type": "string",
+          "description": "Clothing and physical appearance description.",
+          "maxLength": 2000
+        },
+        "additionalInfo": {
+          "type": "string",
+          "description": "Medical notes, languages, or identifying marks.",
+          "maxLength": 2000
+        },
+        "contactPhone": {
+          "type": "string",
+          "description": "Guardian or finder contact phone number.",
+          "minLength": 3,
+          "maxLength": 50
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Pending", "Missing", "Found", "Reunited", "Closed"],
+          "description": "Moderation and case resolution status."
+        },
+        "adminNotes": {
+          "type": "string",
+          "description": "Administrator verification notes.",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when report was submitted."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when report was last updated."
+        }
+      },
+      "required": [
+        "userId",
+        "reporterName",
+        "reportType",
+        "age",
+        "gender",
+        "photoUrl",
+        "location",
+        "reportDate",
+        "contactPhone",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminEntry": {
+      "title": "Administrator Registry Entry",
+      "description": "Trusted administrator UID marker document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "ConnectionTest": {
+      "title": "Connection Probe Document",
+      "description": "Read-only health probe document for validating Firestore connectivity.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "maxLength": 32
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profiles and monitoring coordinates, readable/writable only by the owner or verified administrators."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Missing and found person case reports. Pending reports are restricted to the owner and administrators."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminEntry" },
+      "description": "Trusted administrator lookup collection managed exclusively by the bootstrapped administrator."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/ConnectionTest" },
+      "description": "Startup Firestore connection validation path."
+    }
+  }
+}

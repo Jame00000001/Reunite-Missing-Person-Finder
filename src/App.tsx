@@ -11,9 +11,15 @@ import { MissingPosterModal } from './components/MissingPosterModal.tsx';
 import { ReportFormModal } from './components/ReportFormModal.tsx';
 import { EditReportModal } from './components/EditReportModal.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
+import { LocationNotificationModal } from './components/LocationNotificationModal.tsx';
 import { FilterState } from './components/SearchFilters.tsx';
-import { Report, DashboardStats } from './types/index.ts';
+import { Report, DashboardStats, NearbyAlertSummary } from './types/index.ts';
 import { api } from './services/api.ts';
+import {
+  getPublicReportsFromFirestore,
+  getAllReportsAdminFromFirestore,
+  getReportByIdFromFirestore,
+} from './services/firestoreService.ts';
 
 const initialFilters: FilterState = {
   search: '',
@@ -25,28 +31,39 @@ const initialFilters: FilterState = {
 };
 
 const initialStats: DashboardStats = {
-  total: 5,
-  pending: 1,
-  missing: 2,
-  found: 1,
-  reunited: 1,
+  total: 0,
+  pending: 0,
+  missing: 0,
+  found: 0,
+  reunited: 0,
   closed: 0,
-  usersCount: 3,
+  usersCount: 0,
 };
 
-function MainAppContent() {
-  const { user, isAuthenticated, isAdmin } = useAuth();
+function computeStatsFromReports(items: Report[]): DashboardStats {
+  return {
+    total: items.length,
+    pending: items.filter((r) => r.status === 'Pending').length,
+    missing: items.filter((r) => r.status === 'Missing').length,
+    found: items.filter((r) => r.status === 'Found').length,
+    reunited: items.filter((r) => r.status === 'Reunited').length,
+    closed: items.filter((r) => r.status === 'Closed').length,
+    usersCount: 0,
+  };
+}
 
-  // Navigation state
+function MainAppContent() {
+  const { isAuthenticated, isAdmin } = useAuth();
+
   const [currentTab, setCurrentTab] = useState<'home' | 'search' | 'dashboard' | 'admin'>('home');
 
-  // Data states
   const [reports, setReports] = useState<Report[]>([]);
   const [stats, setStats] = useState<DashboardStats>(initialStats);
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [isLoadingReports, setIsLoadingReports] = useState<boolean>(true);
+  const [unreadAlertsCount, setUnreadAlertsCount] = useState<number>(0);
+  const [submissionNotice, setSubmissionNotice] = useState<string | null>(null);
 
-  // Modals state
   const [selectedDetailReport, setSelectedDetailReport] = useState<Report | null>(null);
   const [selectedPosterReport, setSelectedPosterReport] = useState<Report | null>(null);
   const [selectedEditReport, setSelectedEditReport] = useState<Report | null>(null);
@@ -54,23 +71,21 @@ function MainAppContent() {
   const [reportModalType, setReportModalType] = useState<'missing' | 'found'>('missing');
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+  const [locationAlertsModalOpen, setLocationAlertsModalOpen] = useState<boolean>(false);
 
-  // Load public reports and stats
   const fetchReports = useCallback(async () => {
     setIsLoadingReports(true);
     try {
-      const res = await api.reports.getAll({
+      const fetched = await getPublicReportsFromFirestore({
         search: filters.search || undefined,
         type: filters.type !== 'all' ? filters.type : undefined,
         gender: filters.gender !== 'all' ? filters.gender : undefined,
         status: filters.status !== 'all' ? filters.status : undefined,
         location: filters.location || undefined,
       });
-      if (res.success) {
-        setReports(res.reports);
-      }
+      setReports(fetched);
     } catch (err) {
-      console.error('Error fetching reports:', err);
+      console.error('Error fetching reports from Firestore:', err);
     } finally {
       setIsLoadingReports(false);
     }
@@ -78,12 +93,49 @@ function MainAppContent() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await api.system.getHealth();
-      if (res && res.stats) {
-        setStats(res.stats);
-      }
+      const items = isAdmin
+        ? await getAllReportsAdminFromFirestore()
+        : await getPublicReportsFromFirestore();
+      setStats(computeStatsFromReports(items));
     } catch (err) {
-      console.error('Error fetching health stats:', err);
+      console.error('Error computing Firestore stats:', err);
+    }
+  }, [isAdmin]);
+
+  const fetchAlertUnreadCount = useCallback(async () => {
+    if (!isAuthenticated) {
+      setUnreadAlertsCount(0);
+      return;
+    }
+    try {
+      const res = await api.notifications.getHistory();
+      if (res.success) {
+        setUnreadAlertsCount(res.unreadCount);
+      }
+    } catch {
+      // silent
+    }
+  }, [isAuthenticated]);
+
+  const openReportById = useCallback(async (reportId: string) => {
+    if (!reportId) return;
+    try {
+      const report = await getReportByIdFromFirestore(reportId);
+      if (report) {
+        setSelectedDetailReport(report);
+        return;
+      }
+    } catch {
+      // Fallback to server alert preview if report is still Pending and user received a nearby alert
+    }
+
+    try {
+      const previewRes = await api.notifications.getAlertReportPreview(reportId);
+      if (previewRes.success && previewRes.report) {
+        setSelectedDetailReport(previewRes.report);
+      }
+    } catch {
+      // silent
     }
   }, []);
 
@@ -92,7 +144,36 @@ function MainAppContent() {
     fetchStats();
   }, [fetchReports, fetchStats]);
 
-  // Open modal handlers
+  useEffect(() => {
+    fetchAlertUnreadCount();
+  }, [fetchAlertUnreadCount]);
+
+  // Handle deep-linking from push notification URL (?reportId=<id>) and Service Worker messages
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const rawReportId = params.get('reportId')?.trim();
+    if (rawReportId) {
+      openReportById(rawReportId);
+      params.delete('reportId');
+      const nextSearch = params.toString();
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`;
+      window.history.replaceState({}, '', nextUrl);
+    }
+
+    if ('serviceWorker' in navigator) {
+      const handleSwMessage = (event: MessageEvent) => {
+        if (event.data?.type === 'OPEN_REPORT' && event.data?.reportId) {
+          openReportById(String(event.data.reportId));
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      };
+    }
+    return undefined;
+  }, [openReportById]);
+
   const handleOpenReportMissing = () => {
     if (!isAuthenticated) {
       setAuthModalMode('login');
@@ -118,9 +199,16 @@ function MainAppContent() {
     setAuthModalOpen(true);
   };
 
-  const handleReportSubmitted = () => {
+  const handleReportSubmitted = (alertSummary?: NearbyAlertSummary) => {
     fetchReports();
     fetchStats();
+    fetchAlertUnreadCount();
+    if (alertSummary && alertSummary.matchedUsers > 0) {
+      setSubmissionNotice(
+        `Report submitted! ${alertSummary.matchedUsers} nearby registered user(s) within 10 km have been alerted.`
+      );
+      window.setTimeout(() => setSubmissionNotice(null), 8000);
+    }
   };
 
   const handleFilterChange = (newFilters: Partial<FilterState>) => {
@@ -133,7 +221,6 @@ function MainAppContent() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans antialiased selection:bg-blue-600 selection:text-white">
-      {/* Navigation Header */}
       <Navbar
         currentTab={currentTab}
         setCurrentTab={(tab) => setCurrentTab(tab as any)}
@@ -141,9 +228,16 @@ function MainAppContent() {
         onOpenReportFound={handleOpenReportFound}
         onOpenAuth={handleOpenAuth}
         pendingCount={stats.pending}
+        unreadAlertsCount={unreadAlertsCount}
+        onOpenLocationAlerts={() => setLocationAlertsModalOpen(true)}
       />
 
-      {/* Main App Page Body */}
+      {submissionNotice && (
+        <div className="bg-emerald-600 text-white text-xs font-semibold px-4 py-2.5 text-center shadow-sm">
+          {submissionNotice}
+        </div>
+      )}
+
       <main className="flex-1">
         {currentTab === 'home' && (
           <HomePage
@@ -180,6 +274,12 @@ function MainAppContent() {
             onViewDetails={(report) => setSelectedDetailReport(report)}
             onPrintPoster={(report) => setSelectedPosterReport(report)}
             onOpenAuth={handleOpenAuth}
+            unreadAlertsCount={unreadAlertsCount}
+            onOpenLocationAlerts={() => setLocationAlertsModalOpen(true)}
+            onDataChanged={() => {
+              fetchReports();
+              fetchStats();
+            }}
           />
         )}
 
@@ -188,14 +288,16 @@ function MainAppContent() {
             onEditReport={(report) => setSelectedEditReport(report)}
             onViewDetails={(report) => setSelectedDetailReport(report)}
             onPrintPoster={(report) => setSelectedPosterReport(report)}
+            onDataChanged={() => {
+              fetchReports();
+              fetchStats();
+            }}
           />
         )}
       </main>
 
-      {/* Footer */}
       <Footer />
 
-      {/* Modals & Dialogs */}
       <PersonDetailModal
         report={selectedDetailReport}
         onClose={() => setSelectedDetailReport(null)}
@@ -227,6 +329,13 @@ function MainAppContent() {
         }}
       />
 
+      <LocationNotificationModal
+        isOpen={locationAlertsModalOpen}
+        onClose={() => setLocationAlertsModalOpen(false)}
+        onOpenReportById={openReportById}
+        onUnreadCountChange={setUnreadAlertsCount}
+      />
+
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
@@ -234,6 +343,7 @@ function MainAppContent() {
         onSuccess={() => {
           fetchReports();
           fetchStats();
+          fetchAlertUnreadCount();
         }}
       />
     </div>

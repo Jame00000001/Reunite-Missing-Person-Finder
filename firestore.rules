@@ -1,0 +1,291 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default-deny all reads and writes
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared Hardened Primitives
+    // -------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isEmailVerified() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isEmailVerified() && request.auth.token.email == 'hossain241-35-033@diu.edu.bd';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isEmailVerified() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOptionalString(val, maxLen) {
+      return val == null || (val is string && val.size() <= maxLen);
+    }
+
+    function isValidCoordinatesPair(lat, lng) {
+      return (lat == null && lng == null) || (
+        lat is number &&
+        lng is number &&
+        lat >= -90 && lat <= 90 &&
+        lng >= -180 && lng <= 180
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+        'uid',
+        'name',
+        'email',
+        'phone',
+        'role',
+        'latitude',
+        'longitude',
+        'locationLabel',
+        'notificationsEnabled',
+        'locationUpdatedAt',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'name',
+        'email',
+        'phone',
+        'role',
+        'latitude',
+        'longitude',
+        'locationLabel',
+        'notificationsEnabled',
+        'locationUpdatedAt',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == userId &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+      data.phone is string && data.phone.size() <= 50 &&
+      data.role in ['user', 'admin'] &&
+      isValidCoordinatesPair(data.latitude, data.longitude) &&
+      isOptionalString(data.locationLabel, 255) &&
+      data.notificationsEnabled is bool &&
+      (data.locationUpdatedAt == null || data.locationUpdatedAt is timestamp) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll([
+        'userId',
+        'reporterName',
+        'reportType',
+        'name',
+        'age',
+        'gender',
+        'photoUrl',
+        'location',
+        'latitude',
+        'longitude',
+        'placeId',
+        'reportDate',
+        'reportTime',
+        'clothingDescription',
+        'additionalInfo',
+        'contactPhone',
+        'status',
+        'adminNotes',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'userId',
+        'reporterName',
+        'reportType',
+        'name',
+        'age',
+        'gender',
+        'photoUrl',
+        'location',
+        'latitude',
+        'longitude',
+        'placeId',
+        'reportDate',
+        'reportTime',
+        'clothingDescription',
+        'additionalInfo',
+        'contactPhone',
+        'status',
+        'adminNotes',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.userId) &&
+      data.reporterName is string && data.reporterName.size() >= 1 && data.reporterName.size() <= 150 &&
+      data.reportType in ['missing', 'found'] &&
+      isOptionalString(data.name, 150) &&
+      data.age is number && data.age >= 0 && data.age <= 130 &&
+      data.gender in ['Male', 'Female', 'Other'] &&
+      data.photoUrl is string && data.photoUrl.size() >= 1 && data.photoUrl.size() <= 900000 &&
+      data.location is string && data.location.size() >= 1 && data.location.size() <= 300 &&
+      isValidCoordinatesPair(data.latitude, data.longitude) &&
+      isOptionalString(data.placeId, 255) &&
+      data.reportDate is string && data.reportDate.size() >= 4 && data.reportDate.size() <= 30 &&
+      isOptionalString(data.reportTime, 30) &&
+      isOptionalString(data.clothingDescription, 2000) &&
+      isOptionalString(data.additionalInfo, 2000) &&
+      data.contactPhone is string && data.contactPhone.size() >= 3 && data.contactPhone.size() <= 50 &&
+      data.status in ['Pending', 'Missing', 'Found', 'Reunited', 'Closed'] &&
+      isOptionalString(data.adminNotes, 2000) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAdminEntry(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+      data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+      isValidId(data.uid) && data.uid == userId &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+      data.createdAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+
+    // /users/{userId}: PII isolated strictly to owner and verified admins
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == request.auth.uid &&
+        incoming().role == 'user' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'phone', 'role', 'latitude', 'longitude', 'locationLabel',
+              'notificationsEnabled', 'locationUpdatedAt', 'updatedAt'
+            ])) ||
+          (isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'phone', 'latitude', 'longitude', 'locationLabel',
+              'notificationsEnabled', 'locationUpdatedAt', 'updatedAt'
+            ]))
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // /reports/{reportId}: Publicly readable once verified; Pending restricted to owner/admin
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && (
+        existing().status != 'Pending' ||
+        isOwner(existing().userId) ||
+        isAdmin()
+      );
+
+      // No get()/exists() in allow list (Cost-Optimization Clause)
+      allow list: if existing().status != 'Pending' ||
+        isOwner(existing().userId) ||
+        isBootstrappedAdmin();
+
+      allow create: if isEmailVerified() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        ((incoming().status == 'Pending' && incoming().adminNotes == null) || isAdmin());
+
+      allow update: if isEmailVerified() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'reportType', 'name', 'age', 'gender', 'photoUrl', 'location',
+              'latitude', 'longitude', 'placeId', 'reportDate', 'reportTime',
+              'clothingDescription', 'additionalInfo', 'contactPhone',
+              'status', 'adminNotes', 'updatedAt'
+            ])) ||
+          (isOwner(existing().userId) &&
+            !(existing().status in ['Reunited', 'Closed']) && (
+              (incoming().status == existing().status &&
+                incoming().adminNotes == existing().adminNotes &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'name', 'age', 'gender', 'photoUrl', 'location',
+                  'latitude', 'longitude', 'placeId', 'reportDate', 'reportTime',
+                  'clothingDescription', 'additionalInfo', 'contactPhone', 'updatedAt'
+                ])) ||
+              (incoming().status == 'Reunited' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+            ))
+        );
+
+      allow delete: if isEmailVerified() && isValidId(reportId) && (
+        isAdmin() || isOwner(existing().userId)
+      );
+    }
+
+    // /admins/{userId}: Managed exclusively by bootstrapped administrator
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isBootstrappedAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isBootstrappedAdmin() &&
+        isValidId(userId) &&
+        isValidAdminEntry(incoming(), userId) &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isBootstrappedAdmin() && isValidId(userId);
+    }
+
+    // /test/connection: Startup Firestore connectivity probe
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+    }
+  }
+}

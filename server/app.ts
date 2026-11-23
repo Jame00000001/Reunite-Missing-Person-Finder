@@ -1,37 +1,28 @@
+import 'dotenv/config';
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
-import authRoutes from './routes/authRoutes.ts';
-import reportRoutes from './routes/reportRoutes.ts';
-import adminRoutes from './routes/adminRoutes.ts';
-import { db } from './config/db.ts';
+import notificationRoutes from './routes/notificationRoutes.ts';
+import mapsRoutes from './routes/mapsRoutes.ts';
 
 const app: Express = express();
 
 // Middlewares
 app.use(cors());
-// Support base64 image uploads
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/admin', adminRoutes);
+// API Routes (OSM Geocoding Proxy + Web Push 10 km Notification Dispatcher)
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/maps', mapsRoutes);
 
-// Health Check & Stats
-app.get('/api/health', async (_req: Request, res: Response) => {
-  try {
-    const stats = await db.getStats();
-    res.json({
-      status: 'healthy',
-      app: 'Reunite – Missing Person Finder API',
-      database: db.isUsingMySql() ? 'MySQL (reunite_db)' : 'Persistent Local Engine',
-      stats,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
+// Health Check
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'healthy',
+    app: 'Reunite – Missing Person Finder API',
+    database: 'Firebase Cloud Firestore',
+    timestamp: new Date().toISOString(),
+  });
 });
 
 export default app;

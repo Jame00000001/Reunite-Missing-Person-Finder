@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ShieldCheck,
   Check,
@@ -14,133 +14,140 @@ import {
   Database,
   Printer,
   Phone,
-  Calendar,
   MapPin,
+  LogIn,
+  Sparkles,
 } from 'lucide-react';
 import { Report, User, ReportStatus } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { api } from '../services/api.ts';
+import { BOOTSTRAPPED_ADMIN_EMAIL } from '../lib/firebase.ts';
+import {
+  getAllReportsAdminFromFirestore,
+  getAllUsersFromFirestore,
+  updateReportInFirestore,
+  deleteReportInFirestore,
+  seedSampleReportsAdmin,
+} from '../services/firestoreService.ts';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 interface AdminDashboardPageProps {
   onEditReport: (report: Report) => void;
   onViewDetails: (report: Report) => void;
   onPrintPoster: (report: Report) => void;
+  onDataChanged?: () => void;
 }
 
 export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
   onEditReport,
   onViewDetails,
   onPrintPoster,
+  onDataChanged,
 }) => {
-  const { user, isAdmin, login, isAuthenticated } = useAuth();
+  const { user, isAdmin, signInWithGoogle, isAuthenticated } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'users' | 'system'>('pending');
   const [reports, setReports] = useState<Report[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [stats, setStats] = useState<any>(null);
-  const [isMySql, setIsMySql] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSeeding, setIsSeeding] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [statusChangeFeedback, setStatusChangeFeedback] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Quick admin login form state
-  const [adminEmail, setAdminEmail] = useState('admin@reunite.org');
-  const [adminPassword, setAdminPassword] = useState('admin123');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const handleAdminLogin = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleGoogleAdminSignIn = async () => {
     setIsLoggingIn(true);
     setAuthError(null);
     try {
-      const res = await login(adminEmail, adminPassword);
+      const res = await signInWithGoogle();
       if (!res.success) {
-        setAuthError(res.message || 'Invalid admin credentials');
+        setAuthError(res.message || 'Google Sign-In failed');
+      } else if (res.user && res.user.role !== 'admin') {
+        setAuthError(
+          `Signed in as ${res.user.email}, which does not have administrator privileges. Sign in with ${BOOTSTRAPPED_ADMIN_EMAIL}.`
+        );
       }
     } catch (err: any) {
-      setAuthError(err?.message || 'Login failed');
+      setAuthError(err?.message || 'Sign-in failed');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
-  const handleQuickAdminLogin = async () => {
-    setIsLoggingIn(true);
-    setAuthError(null);
-    setAdminEmail('admin@reunite.org');
-    setAdminPassword('admin123');
-    try {
-      const res = await login('admin@reunite.org', 'admin123');
-      if (!res.success) {
-        setAuthError(res.message || 'Failed to login as admin');
-      }
-    } catch (err: any) {
-      setAuthError(err?.message || 'Quick login failed');
-    } finally {
-      setIsLoggingIn(false);
-    }
-  };
-
-  const fetchAdminData = async () => {
+  const fetchAdminData = useCallback(async () => {
     setIsLoading(true);
+    setErrorBanner(null);
     try {
-      const [reportsRes, usersRes, statsRes] = await Promise.all([
-        api.admin.getAllReports(),
-        api.admin.getUsers(),
-        api.admin.getStats(),
+      const [allReports, allUsers] = await Promise.all([
+        getAllReportsAdminFromFirestore(),
+        getAllUsersFromFirestore(),
       ]);
-
-      if (reportsRes.success) setReports(reportsRes.reports);
-      if (usersRes.success) setUsers(usersRes.users);
-      if (statsRes.success) {
-        setStats(statsRes.stats);
-        setIsMySql(statsRes.isMySqlConnected);
-      }
-    } catch (err) {
+      setReports(allReports);
+      setUsers(allUsers);
+    } catch (err: any) {
       console.error('Failed to load admin data:', err);
+      setErrorBanner('Failed to load Firestore admin records. Check security permissions.');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (isAdmin) {
       fetchAdminData();
     }
-  }, [isAdmin]);
+  }, [isAdmin, fetchAdminData]);
 
-  const handleStatusChange = async (id: number, newStatus: ReportStatus, note?: string) => {
+  const handleStatusChange = async (id: string, newStatus: ReportStatus, note?: string) => {
+    setErrorBanner(null);
     try {
-      const res = await api.admin.updateStatus(id, newStatus, note);
-      if (res.success) {
-        setStatusChangeFeedback(`Report #${id} status changed to "${newStatus}"!`);
-        fetchAdminData();
-        setTimeout(() => setStatusChangeFeedback(null), 4000);
-      } else {
-        alert(res.message || 'Failed to update status.');
-      }
-    } catch {
-      alert('Error updating status.');
+      await updateReportInFirestore(
+        id,
+        {
+          status: newStatus,
+          ...(note !== undefined ? { admin_notes: note } : {}),
+        },
+        true
+      );
+      setStatusChangeFeedback(`Report #${id.slice(0, 8)} status changed to "${newStatus}"!`);
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+      setTimeout(() => setStatusChangeFeedback(null), 4000);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to update case status.');
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!window.confirm(`Are you sure you want to permanently delete report #${id}?`)) {
-      return;
-    }
-
+  const handleDelete = async (id: string) => {
+    setErrorBanner(null);
     try {
-      const res = await api.reports.delete(id);
-      if (res.success) {
-        setStatusChangeFeedback(`Report #${id} deleted successfully.`);
-        setReports((prev) => prev.filter((r) => r.id !== id));
-      } else {
-        alert(res.message || 'Failed to delete report.');
-      }
-    } catch {
-      alert('Error deleting report.');
+      await deleteReportInFirestore(id);
+      setStatusChangeFeedback(`Report #${id.slice(0, 8)} deleted successfully.`);
+      setConfirmDeleteId(null);
+      setReports((prev) => prev.filter((r) => r.id !== id));
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Error deleting report.');
+    }
+  };
+
+  const handleLoadSampleCases = async () => {
+    if (!user) return;
+    setIsSeeding(true);
+    setErrorBanner(null);
+    try {
+      const count = await seedSampleReportsAdmin(user.id, user.name);
+      setStatusChangeFeedback(`Added ${count} sample missing/found cases to Cloud Firestore.`);
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to seed sample cases.');
+    } finally {
+      setIsSeeding(false);
     }
   };
 
@@ -152,9 +159,9 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             <ShieldCheck className="w-9 h-9" />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Admin Console Login</h2>
+            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Admin Console Sign-In</h2>
             <p className="text-xs text-slate-500 mt-1">
-              Administrator credentials required to verify cases, approve pending reports, and manage database records.
+              Sign in with the verified administrator Google account to review pending cases and manage Firestore records.
             </p>
           </div>
         </div>
@@ -163,10 +170,10 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
           <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
             <p className="font-bold flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              Currently Logged in as: {user.name}
+              Currently Signed In as: {user.name} ({user.email})
             </p>
             <p className="text-amber-700 text-[11px]">
-              This account has standard user privileges. Please switch to the administrator account below.
+              This account has standard guardian privileges. Switch to the administrator Google account below.
             </p>
           </div>
         )}
@@ -178,68 +185,26 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
           </div>
         )}
 
-        {/* 1-Click Quick Admin Login Button */}
         <button
           type="button"
-          onClick={handleQuickAdminLogin}
+          onClick={handleGoogleAdminSignIn}
           disabled={isLoggingIn}
-          className="w-full py-3 px-4 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-bold text-sm shadow-md shadow-purple-700/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
+          className="w-full py-3 px-4 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-bold text-sm shadow-md shadow-purple-700/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
         >
-          <ShieldCheck className="w-4 h-4" />
-          <span>{isLoggingIn ? 'Logging in...' : '⚡ Quick Log In as Admin (1-Click)'}</span>
+          <LogIn className="w-4 h-4" />
+          <span>{isLoggingIn ? 'Signing in with Google...' : 'Sign In with Google (Admin)'}</span>
         </button>
-
-        <div className="relative flex items-center justify-center">
-          <div className="border-t border-slate-200 w-full" />
-          <span className="bg-white px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider absolute">
-            Or Sign In Manually
-          </span>
-        </div>
-
-        <form onSubmit={handleAdminLogin} className="space-y-3 text-xs">
-          <div>
-            <label className="block text-slate-700 font-bold mb-1">Admin Email</label>
-            <input
-              type="email"
-              required
-              value={adminEmail}
-              onChange={(e) => setAdminEmail(e.target.value)}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-hidden focus:border-purple-600"
-              placeholder="admin@reunite.org"
-            />
-          </div>
-
-          <div>
-            <label className="block text-slate-700 font-bold mb-1">Admin Password</label>
-            <input
-              type="password"
-              required
-              value={adminPassword}
-              onChange={(e) => setAdminPassword(e.target.value)}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-hidden focus:border-purple-600"
-              placeholder="••••••••"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={isLoggingIn}
-            className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs transition-colors cursor-pointer"
-          >
-            {isLoggingIn ? 'Verifying...' : 'Sign In with Credentials'}
-          </button>
-        </form>
 
         <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-center">
           <p className="text-[11px] text-slate-500 font-medium">
-            Demo Credentials: <span className="font-mono text-purple-700 font-bold">admin@reunite.org</span> / <span className="font-mono text-purple-700 font-bold">admin123</span>
+            Authorized Admin Email:{' '}
+            <span className="font-mono text-purple-700 font-bold">{BOOTSTRAPPED_ADMIN_EMAIL}</span>
           </p>
         </div>
       </div>
     );
   }
 
-  // Filtered lists
   const pendingReports = reports.filter((r) => r.status === 'Pending');
 
   const filteredAllReports = reports.filter((r) => {
@@ -286,25 +251,49 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             Reunite Management & Verification Console
           </h1>
           <p className="text-xs text-purple-200 mt-1">
-            Logged in as <strong>{user?.name}</strong> ({user?.email}) • Administrator
+            Signed in as <strong>{user?.name}</strong> ({user?.email}) • Administrator
           </p>
         </div>
 
-        <button
-          onClick={fetchAdminData}
-          disabled={isLoading}
-          className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors border border-white/20"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          <span>Refresh Records</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {reports.length === 0 && !isLoading && (
+            <button
+              onClick={handleLoadSampleCases}
+              disabled={isSeeding}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{isSeeding ? 'Seeding...' : 'Load Sample Cases'}</span>
+            </button>
+          )}
+          <button
+            onClick={fetchAdminData}
+            disabled={isLoading}
+            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors border border-white/20"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Refresh Records</span>
+          </button>
+        </div>
       </div>
 
-      {/* Feedback message */}
+      {/* Feedback & Error messages */}
       {statusChangeFeedback && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{statusChangeFeedback}</span>
+        </div>
+      )}
+
+      {errorBanner && (
+        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            {errorBanner}
+          </span>
+          <button onClick={() => setErrorBanner(null)} className="underline font-bold">
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -449,7 +438,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                           <span className="text-xs bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full border border-amber-300">
                             Pending Review
                           </span>
-                          <span className="text-xs text-slate-400">ID: #{report.id}</span>
+                          <span className="text-xs text-slate-400">ID: #{report.id.slice(0, 8)}</span>
                         </div>
 
                         <h4 className="font-bold text-base text-slate-900">
@@ -466,7 +455,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                             <strong>Contact:</strong> {report.contact_phone}
                           </p>
                           <p className="text-slate-500 text-[11px]">
-                            Submitted by: {report.reporter_name} ({report.reporter_email})
+                            Submitted by: {report.reporter_name}
                           </p>
                         </div>
                       </div>
@@ -481,7 +470,6 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                         Details
                       </button>
 
-                      {/* Approve button */}
                       <button
                         onClick={() =>
                           handleStatusChange(
@@ -496,10 +484,13 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                         <span>Approve Case</span>
                       </button>
 
-                      {/* Reject button */}
                       <button
                         onClick={() =>
-                          handleStatusChange(report.id, 'Closed', 'Rejected by administrator: insufficient details or unverified.')
+                          handleStatusChange(
+                            report.id,
+                            'Closed',
+                            'Rejected by administrator: insufficient details or unverified.'
+                          )
                         }
                         className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-lg flex items-center gap-1"
                       >
@@ -515,13 +506,30 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                         <Edit className="w-4 h-4" />
                       </button>
 
-                      <button
-                        onClick={() => handleDelete(report.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
-                        title="Delete Report"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {confirmDeleteId === report.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleDelete(report.id)}
+                            className="px-2 py-1 bg-rose-600 text-white text-[11px] font-bold rounded"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 bg-slate-100 text-slate-600 text-[11px] font-bold rounded"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteId(report.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
+                          title="Delete Report"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -534,7 +542,6 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
       {/* Tab 2: All Reports Management */}
       {activeTab === 'all' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          {/* Filter Bar */}
           <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row gap-3 items-center justify-between">
             <div className="relative w-full sm:w-72">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -564,7 +571,6 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             </div>
           </div>
 
-          {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-slate-700">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
@@ -581,7 +587,9 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {filteredAllReports.map((report) => (
                   <tr key={report.id} className="hover:bg-slate-50/80">
-                    <td className="p-3 pl-4 font-mono font-bold text-slate-400">#{report.id}</td>
+                    <td className="p-3 pl-4 font-mono font-bold text-slate-400">
+                      #{report.id.slice(0, 8)}
+                    </td>
                     <td className="p-3">
                       <div className="flex items-center gap-2">
                         <img
@@ -616,7 +624,6 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                     </td>
                     <td className="p-3 font-mono text-[11px]">{report.contact_phone}</td>
                     <td className="p-3">
-                      {/* Interactive status selector */}
                       <select
                         value={report.status}
                         onChange={(e) => handleStatusChange(report.id, e.target.value as ReportStatus)}
@@ -654,13 +661,30 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                         >
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => handleDelete(report.id)}
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {confirmDeleteId === report.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleDelete(report.id)}
+                              className="px-2 py-0.5 bg-rose-600 text-white text-[10px] font-bold rounded"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-1.5 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteId(report.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -678,7 +702,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             <div>
               <h3 className="font-black text-lg text-slate-900">Registered System Users</h3>
               <p className="text-xs text-slate-500">
-                List of registered guardians, volunteers, and system administrators
+                List of registered guardians, volunteers, and system administrators in Cloud Firestore
               </p>
             </div>
             <span className="text-xs bg-slate-100 text-slate-700 px-3 py-1 rounded-full font-bold">
@@ -690,10 +714,10 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             <table className="w-full text-left text-xs text-slate-700">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
                 <tr>
-                  <th className="p-3 pl-4">User ID</th>
+                  <th className="p-3 pl-4">UID</th>
                   <th className="p-3">Name</th>
                   <th className="p-3">Email Address</th>
-                  <th className="p-3">Phone Number</th>
+                  <th className="p-3">Alert Location</th>
                   <th className="p-3">Account Role</th>
                   <th className="p-3 pr-4">Joined Date</th>
                 </tr>
@@ -701,10 +725,14 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {users.map((u) => (
                   <tr key={u.id} className="hover:bg-slate-50/80">
-                    <td className="p-3 pl-4 font-mono font-bold text-slate-400">#{u.id}</td>
+                    <td className="p-3 pl-4 font-mono font-bold text-slate-400">
+                      #{u.id.slice(0, 8)}
+                    </td>
                     <td className="p-3 font-bold text-slate-900">{u.name}</td>
                     <td className="p-3 text-slate-600">{u.email}</td>
-                    <td className="p-3 font-mono">{u.phone}</td>
+                    <td className="p-3 text-slate-600 truncate max-w-[180px]">
+                      {u.location_label || (u.latitude ? `${u.latitude.toFixed(3)}, ${u.longitude?.toFixed(3)}` : 'Not set')}
+                    </td>
                     <td className="p-3">
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -737,7 +765,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             <div>
               <h3 className="font-black text-lg text-slate-900">Database & System Architecture</h3>
               <p className="text-xs text-slate-500">
-                Software Engineering Project Database & REST API Status
+                Firebase Cloud Firestore, Authentication, OpenStreetMap & Web Push Status
               </p>
             </div>
           </div>
@@ -745,21 +773,17 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                Database Engine Status
+                Cloud Database Engine
               </span>
               <div className="flex items-center gap-2">
-                <span
-                  className={`w-3 h-3 rounded-full ${
-                    isMySql ? 'bg-emerald-500' : 'bg-blue-500'
-                  } animate-pulse`}
-                />
+                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="font-bold text-slate-900 text-sm">
-                  {isMySql ? 'Connected to MySQL (reunite_db)' : 'Persistent Storage Engine Active'}
+                  Connected to Firebase Cloud Firestore
                 </span>
               </div>
               <p className="text-xs text-slate-600">
-                The database schema is located at <code>database/schema.sql</code> and defines the
-                tables <code>users</code> and <code>reports</code> with relational foreign keys.
+                Project: <code>{firebaseConfig.projectId}</code> • Database ID:{' '}
+                <code>{firebaseConfig.firestoreDatabaseId}</code>.
               </p>
             </div>
 
@@ -769,11 +793,12 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
               </span>
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                <span className="font-bold text-slate-900 text-sm">JWT + bcrypt (10 rounds)</span>
+                <span className="font-bold text-slate-900 text-sm">
+                  Firebase Auth + Firestore Rules + ID Token Verification
+                </span>
               </div>
               <p className="text-xs text-slate-600">
-                Passwords are automatically hashed with salted bcrypt before storing. REST API endpoints
-                are secured with bearer token middleware.
+                User sessions are authenticated with Firebase Google Sign-In, enforced by deployed Firestore security rules and verified on Express Web Push APIs.
               </p>
             </div>
           </div>
