@@ -1,0 +1,15 @@
+{
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "Reunite – Missing Person Finder",
+        "supportEmail": "hossain241-35-033@diu.edu.bd"
+      }
+    }
+  },
+  "firestore": {
+    "database": "(default)",
+    "rules": "firestore.rules"
+  }
+}

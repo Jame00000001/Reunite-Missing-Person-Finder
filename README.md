@@ -8,18 +8,18 @@ A full-stack web application designed to help families and guardians report, sea
 
 ⚡ Quick Start in 1 Minute
 
-You do not need to install XAMPP or MySQL to run the application immediately.
-The project includes a built-in database system that can automatically save and load application data.
+You do not need XAMPP or MySQL for the app. The application stores accounts and reports in Firebase, so configure the Firebase project before starting it.
 
-Run the project with just 3 commands:
+Run the project with these steps:
 
 # 1. Install the project dependencies
 npm install
-# 2. Create the environment file
+# 2. Create and configure the environment file
 # Windows PowerShell
 Copy-Item .env.example .env
 # Git Bash / macOS / Linux
 cp .env.example .env
+# Edit .env with the Firebase Web App values described below.
 # 3. Start the application
 npm run dev
 
@@ -33,28 +33,77 @@ http://localhost:3000
 
 1. Quick Start
 2. Login Credentials
-3. Step-by-Step VS Code Guide
-4. Optional MySQL / XAMPP Setup
-5. Troubleshooting
+3. Firebase Setup
+4. Step-by-Step VS Code Guide
+5. Optional MySQL / XAMPP Setup
+6. Troubleshooting
 
 ⸻
 
 🔑 1. Login Credentials
 
-You can use the following demo accounts to log in.
+The app uses Firebase Authentication. Create an account with **Register** before signing in, then verify your email from the link Firebase sends. You can also choose **Continue with Google**. The legacy MySQL demo accounts (`admin@reunite.org`, `user@example.com`, and `sarah@example.com`) are not automatically created in Firebase Authentication and cannot be used unless an administrator provisions them in the Firebase project.
 
-You can also use the “⚡ Demo Admin” or “⚡ Demo Guardian” buttons on the login screen for one-click demo access.
-
-Role	Email	Password	Permissions
-System Admin	admin@reunite.org	admin123	Approve/reject pending cases, change case status, and view all users
-Guardian / User	user@example.com	user123	Submit missing/found reports, edit reports, and mark a case as reunited
-Volunteer User	sarah@example.com	user123	Submit and track reports
-
-Note: These are demo credentials intended for testing and project demonstration.
+The verified bootstrap administrator email is configured in `src/lib/firebase.ts` and `firestore.rules`. Update both if you use a different administrator account.
 
 ⸻
 
-💻 2. Step-by-Step VS Code Guide
+🔥 2. Firebase Setup
+
+### 1. Create a Firebase project and web app
+
+1. Open [Firebase Console](https://console.firebase.google.com/) and create or select a project.
+2. In **Project settings → General → Your apps**, add a **Web app** and copy its configuration values.
+3. In **Project settings → General**, note the Firebase project ID.
+
+### 2. Enable sign-in providers
+
+In **Build → Authentication → Get started → Sign-in method**, enable:
+
+- **Email/Password** (the Email/Password option, not Email link) for registration and password sign-in. See [Firebase email/password setup](https://firebase.google.com/docs/auth/web/password-auth).
+- **Google**, and select a support email, for the Google sign-in button. See [Firebase Google sign-in setup](https://firebase.google.com/docs/auth/web/google-signin).
+
+Save the settings. Email/password accounts must verify their email before the app creates their Firestore profile. Add `localhost` and your deployed site domain under **Authentication → Settings → Authorized domains** if they are not listed. Add the hostname only, without `http://` or a port; if you open the app using `127.0.0.1`, add that hostname too. Newer Firebase projects may not include `localhost` automatically.
+
+### 3. Configure the Firestore database
+
+1. In **Build → Firestore Database**, create the database used by the app.
+2. Copy its database ID. For the default database, use `(default)`.
+3. Set the same ID in `.env` as `VITE_FIRESTORE_DATABASE_ID` and `FIRESTORE_DATABASE_ID`, and in `firebase.json` as `firestore.database`.
+4. From the project root, deploy the included Firestore rules:
+
+```bash
+npx firebase-tools login
+npx firebase-tools deploy --only auth,firestore:rules --project reunite-missing-person-finder
+```
+
+When prompted, choose the same Firebase project configured below. The deployment enables Email/Password and Google providers and installs rules that protect pending reports and require verified accounts.
+
+### 4. Set local Firebase values
+
+Copy `.env.example` to `.env`, then set these values from the Firebase web app configuration and database:
+
+```dotenv
+VITE_FIREBASE_API_KEY="your-web-api-key"
+VITE_FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
+VITE_FIREBASE_PROJECT_ID="your-project-id"
+VITE_FIREBASE_APP_ID="your-web-app-id"
+VITE_FIREBASE_MESSAGING_SENDER_ID="your-sender-id"
+VITE_FIREBASE_STORAGE_BUCKET="your-project.firebasestorage.app"
+VITE_FIRESTORE_DATABASE_ID="(default)"
+FIREBASE_PROJECT_ID="your-project-id"
+FIRESTORE_DATABASE_ID="(default)"
+```
+
+`VITE_FIREBASE_*` values are public web-app configuration. Never put Firebase Admin service-account JSON, private keys, or Supabase service-role keys in a `VITE_` variable. The app falls back to `firebase-applet-config.json` when a corresponding `VITE_` value is blank.
+
+The Express API uses the Firebase Admin SDK for token verification and notification storage. For local development, create a service account key from **Project settings → Service accounts**, store the JSON file outside this repository, and set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path. In Google-hosted environments, use Application Default Credentials instead. Never commit the service-account JSON file.
+
+Restart `npm run dev` after changing `.env`. The Firebase project ID and Firestore database ID must match between the web app and Express server.
+
+⸻
+
+💻 3. Step-by-Step VS Code Guide
 
 Step 1: Open the Project in VS Code
 
@@ -95,6 +144,8 @@ cp .env.example .env
 
 This creates the local .env configuration file from .env.example.
 
+Fill in the Firebase values as described in [Firebase Setup](#-2-firebase-setup). Keep the Firebase Admin service-account key out of `.env` values prefixed with `VITE_` and never commit it.
+
 ⸻
 
 Step 4: Start the Application
@@ -111,7 +162,7 @@ http://localhost:3000
 
 ⸻
 
-🗄️ 3. Optional MySQL / XAMPP Setup
+🗄️ 4. Optional MySQL / XAMPP Setup
 
 If you want to connect the project to MySQL for university demonstration, follow these steps.
 
@@ -179,7 +230,15 @@ The application should connect to the MySQL database using the configured enviro
 
 ⸻
 
-🛠️ 4. Troubleshooting
+🛠️ 5. Troubleshooting
+
+### Firebase `auth/unauthorized-domain`
+
+Open **Firebase Console → Authentication → Settings → Authorized domains** and add the hostname shown in your browser address bar (usually `localhost`). Do not include the protocol or port. This is required for Google popup/redirect authentication.
+
+### Firebase sign-up or sign-in returns HTTP 400
+
+Confirm **Email/Password** is enabled under **Authentication → Sign-in method** for the same project used by the app. If `.env` has no `VITE_FIREBASE_PROJECT_ID`, the app uses the project in `firebase-applet-config.json`. The Authentication request's Network response contains the specific Firebase error code.
 
 PowerShell Script Disabled Error
 
@@ -311,7 +370,7 @@ For a quick demonstration:
 
 npm install
 
-Then create the environment file:
+Then configure Firebase using the [Firebase Setup](#-2-firebase-setup) steps and create `.env`:
 
 cp .env.example .env
 
@@ -327,7 +386,7 @@ Open:
 
 http://localhost:3000
 
-and log in using one of the demo accounts.
+and register a Firebase account, verify its email, then sign in. You can also use **Continue with Google** if Google sign-in is enabled.
 
 ⸻
 

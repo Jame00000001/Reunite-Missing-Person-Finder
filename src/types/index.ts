@@ -74,6 +74,7 @@ export interface NotificationLogItem {
 export interface AuthResponse {
   success: boolean;
   message: string;
+  requiresEmailVerification?: boolean;
   token?: string;
   user?: User;
   error?: string;

@@ -11,6 +11,7 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendEmailVerification,
   updateProfile,
   signOut,
   User as FirebaseUser,
@@ -29,6 +30,41 @@ import {
   updateUserLocationPreferencesInFirestore,
 } from '../services/firestoreService.ts';
 import { api } from '../services/api.ts';
+
+function getAuthErrorMessage(error: any, action: 'sign in' | 'register'): string {
+  switch (error?.code) {
+    case 'auth/operation-not-allowed':
+    case 'auth/admin-restricted-operation':
+      return 'Email and password sign-in is disabled for this Firebase project. Enable Email/Password in Firebase Console → Authentication → Sign-in method.';
+    case 'auth/unauthorized-domain':
+      return 'This site domain is not authorized for Firebase Authentication. Add the hostname (for example, localhost) in Firebase Console → Authentication → Settings → Authorized domains.';
+    case 'auth/configuration-not-found':
+      return 'Firebase Authentication is not initialized for the configured project. Deploy the auth section of firebase.json or enable Authentication in that project’s Firebase Console.';
+    case 'auth/invalid-api-key':
+    case 'auth/project-not-found':
+      return 'Firebase is configured with an invalid or unavailable project. Check the VITE_FIREBASE_* values in .env and restart the dev server.';
+    case 'auth/invalid-credential':
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+      return action === 'sign in'
+        ? 'Email or password is incorrect. The old MySQL demo accounts are not Firebase accounts; create an account here or use credentials registered in Firebase.'
+        : 'These credentials could not be used to create an account. Check your email and password, then try again.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Sign in instead.';
+    case 'auth/invalid-email':
+      return 'Enter a valid email address.';
+    case 'auth/weak-password':
+      return 'Choose a password with at least 6 characters.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled. Contact the project administrator.';
+    case 'auth/too-many-requests':
+      return 'Sign-in is temporarily blocked after too many attempts. Wait a little and try again.';
+    default:
+      return error?.message || `Unable to ${action}. Please try again.`;
+  }
+}
+
+const pendingPhoneKey = (uid: string) => `reunite-pending-phone:${uid}`;
 
 interface AuthContextType {
   user: User | null;
@@ -54,7 +90,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const loadUserProfile = useCallback(async (fbUser: FirebaseUser) => {
-    const profile = await ensureUserProfile(fbUser);
+    let profile = await ensureUserProfile(fbUser);
+    const pendingPhone = localStorage.getItem(pendingPhoneKey(fbUser.uid));
+    if (pendingPhone && !profile.phone) {
+      profile = await updateUserLocationPreferencesInFirestore(profile.id, {
+        phone: pendingPhone,
+      });
+      localStorage.removeItem(pendingPhoneKey(fbUser.uid));
+    }
 
     setUser(profile);
 
@@ -77,6 +120,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setFirebaseUser(fbUser);
 
       if (!fbUser) {
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
+
+      const isPasswordAccount = fbUser.providerData.some(
+        (provider) => provider.providerId === 'password'
+      );
+      if (isPasswordAccount && !fbUser.emailVerified) {
         setUser(null);
         setIsLoading(false);
         return;
@@ -150,7 +202,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       return {
         success: false,
-        message: err?.message || 'Google Sign-In failed. Please try again.',
+        message: getAuthErrorMessage(err, 'sign in'),
       };
     } finally {
       setIsLoading(false);
@@ -161,10 +213,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     setIsLoading(true);
     try {
       const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      if (!credential.user.emailVerified) {
+        await sendEmailVerification(credential.user);
+        await signOut(auth);
+        return {
+          success: false,
+          message: 'Verify your email before signing in. We sent a new verification link; check your inbox and spam folder.',
+        };
+      }
       const profile = await loadUserProfile(credential.user);
       return { success: true, message: 'Logged in successfully.', user: profile };
     } catch (err: any) {
-      return { success: false, message: err?.message || 'Unable to sign in.' };
+      return { success: false, message: getAuthErrorMessage(err, 'sign in') };
     } finally {
       setIsLoading(false);
     }
@@ -175,15 +235,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const credential = await createUserWithEmailAndPassword(auth, data.email.trim(), data.password);
       await updateProfile(credential.user, { displayName: data.name.trim() });
-      const profile = await loadUserProfile(credential.user);
-      const savedProfile = await updateUserLocationPreferencesInFirestore(profile.id, {
-        name: data.name,
-        phone: data.phone,
-      });
-      setUser(savedProfile);
-      return { success: true, message: 'Registration successful.', user: savedProfile };
+      localStorage.setItem(pendingPhoneKey(credential.user.uid), data.phone.trim());
+      await sendEmailVerification(credential.user);
+      await signOut(auth);
+      return {
+        success: true,
+        requiresEmailVerification: true,
+        message: 'Account created. Verify your email using the link we sent, then sign in to finish setting up your profile.',
+      };
     } catch (err: any) {
-      return { success: false, message: err?.message || 'Unable to register.' };
+      if (auth.currentUser && !auth.currentUser.emailVerified) {
+        await signOut(auth).catch(() => {});
+      }
+      return { success: false, message: getAuthErrorMessage(err, 'register') };
     } finally {
       setIsLoading(false);
     }

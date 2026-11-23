@@ -15,7 +15,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'login',
   onSuccess,
 }) => {
-  const { login, register, isLoading } = useAuth();
+  const { login, register, signInWithGoogle, isLoading } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
 
   // Form states
@@ -24,12 +24,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setNotice(null);
 
     if (mode === 'login') {
       if (!email || !password) {
@@ -54,6 +56,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
       const res = await register({ name, email, phone, password });
       if (res.success) {
+        if (res.requiresEmailVerification) {
+          setNotice(res.message);
+          setMode('login');
+          setPassword('');
+          return;
+        }
         if (onSuccess) onSuccess();
         onClose();
       } else {
@@ -62,20 +70,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Quick fill demo credentials
-  const handleQuickLogin = async (demoEmail: string, demoPass: string) => {
+  const handleGoogleSignIn = async () => {
     setError(null);
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    const res = await login(demoEmail, demoPass);
+    setNotice(null);
+    const res = await signInWithGoogle();
     if (res.success) {
-      if (onSuccess) onSuccess();
+      onSuccess?.();
       onClose();
     } else {
-      setError(res.message || 'Quick login failed.');
+      setError(res.message || 'Google sign-in failed.');
     }
   };
 
+  // Quick fill demo credentials
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
       <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 relative my-6">
@@ -134,7 +141,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {/* Error Banner */}
-        {error && (
+          {notice && (
+            <div role="status" className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+              {notice}
+            </div>
+          )}
+          {error && (
           <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-semibold flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{error}</span>
@@ -216,34 +228,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </form>
 
-        {/* Quick Demo Credentials Footer */}
+        <div className="px-6 pt-4">
+          <div className="relative mb-4">
+            <div className="absolute inset-0 flex items-center" aria-hidden="true">
+              <div className="w-full border-t border-slate-200" />
+            </div>
+            <div className="relative flex justify-center">
+              <span className="bg-white px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">Or continue with</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={isLoading}
+            className="w-full py-2.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-sm border border-slate-300 shadow-xs transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <span aria-hidden="true" className="text-base font-black text-blue-600">G</span>
+            {isLoading ? 'Please wait...' : 'Continue with Google'}
+          </button>
+          <p className="mt-2 text-center text-[11px] text-slate-500">
+            Use Google sign-in if Email/Password is disabled for this Firebase project.
+          </p>
+        </div>
+
+        {/* Firebase account guidance */}
         <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs">
           <p className="font-bold text-slate-700 mb-2 uppercase tracking-wider text-[10px]">
-            Academic Evaluation / Quick Demo Accounts:
+            Sign-in information
           </p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('admin@reunite.org', 'admin123')}
-              className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-lg font-bold text-left transition-colors"
-            >
-              <div className="text-[11px] font-black text-purple-700 flex items-center gap-1">
-                <Shield className="w-3 h-3" /> Admin Account
-              </div>
-              <div className="text-[10px] text-purple-600 truncate">admin@reunite.org</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('user@example.com', 'user123')}
-              className="p-2 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-lg font-bold text-left transition-colors"
-            >
-              <div className="text-[11px] font-black text-blue-700 flex items-center gap-1">
-                <UserIcon className="w-3 h-3" /> Demo User
-              </div>
-              <div className="text-[10px] text-blue-600 truncate">user@example.com</div>
-            </button>
-          </div>
+          <p className="text-slate-600 leading-relaxed">
+            Create an account with the Register option before signing in. Legacy MySQL demo credentials are not registered in Firebase Authentication.
+          </p>
         </div>
       </div>
     </div>

@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { Report, User, ReportStatus } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { BOOTSTRAPPED_ADMIN_EMAIL } from '../lib/firebase.ts';
+import { BOOTSTRAPPED_ADMIN_EMAIL, firebaseConfig, firestoreDatabaseId } from '../lib/firebase.ts';
 import {
   getAllReportsAdminFromFirestore,
   getAllUsersFromFirestore,
@@ -28,7 +28,6 @@ import {
   deleteReportInFirestore,
   seedSampleReportsAdmin,
 } from '../services/firestoreService.ts';
-import firebaseConfig from '../../firebase-applet-config.json';
 
 interface AdminDashboardPageProps {
   onEditReport: (report: Report) => void;
@@ -783,7 +782,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
               </div>
               <p className="text-xs text-slate-600">
                 Project: <code>{firebaseConfig.projectId}</code> • Database ID:{' '}
-                <code>{firebaseConfig.firestoreDatabaseId}</code>.
+                <code>{firestoreDatabaseId}</code>.
               </p>
             </div>
 

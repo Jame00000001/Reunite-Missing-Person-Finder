@@ -2,9 +2,13 @@ import { Router } from 'express';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import * as webPush from 'web-push';
 import { adminApp, AuthenticatedRequest, verifyToken } from '../middleware/auth.ts';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 const router = Router();
-const firestore = getFirestore(adminApp);
+const firestore = getFirestore(
+  adminApp,
+  process.env.FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || '(default)'
+);
 const users = firestore.collection('users');
 const logs = firestore.collection('notificationLogs');
 const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || '';

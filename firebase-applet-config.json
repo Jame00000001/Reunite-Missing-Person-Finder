@@ -1,12 +1,12 @@
 {
-  "projectId": "gen-lang-client-0324838490",
-  "appId": "1:679337569328:web:adfa0915db82b85decd1f5",
-  "apiKey": "AIzaSyBhJgJww6pWAQli0lWS4h69HFuBM1AuBNI",
-  "authDomain": "gen-lang-client-0324838490.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-reunitemissingpe-24236595-052d-4f88-851c-240f2504a561",
-  "storageBucket": "gen-lang-client-0324838490.firebasestorage.app",
-  "messagingSenderId": "679337569328",
-  "measurementId": "",
+  "projectId": "reunite-missing-person-finder",
+  "appId": "1:559787001784:web:0cb17d8ee8d68f52fe714d",
+  "apiKey": "AIzaSyDqW3hD_VoFIUMuiKlpdanRqe9q5LL1V7Y",
+  "authDomain": "reunite-missing-person-finder.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "reunite-missing-person-finder.firebasestorage.app",
+  "messagingSenderId": "559787001784",
+  "measurementId": "G-R5QGHTDFJ5",
   "oAuthClientId": "679337569328-g64udg1kahpc1hl42kqa4kotel3fonti.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }
